@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Product Scanner Pro AI</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tesseract.js CDN cho OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body class="bg-gray-100 text-gray-900 select-none pb-24">
+
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-4 shadow-md text-center sticky top-0 z-50">
+        <h1 class="text-lg font-bold">PRODUCT SCANNER PRO</h1>
+    </header>
+
+    <!-- Main Container -->
+    <main id="app" class="max-w-md mx-auto p-4">
+        <!-- Render bằng JavaScript -->
+    </main>
+
+    <!-- Navigation Bar -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex justify-around items-center h-16 shadow-lg z-50">
+        <button onclick="switchTab('scanner')" id="nav-scanner" class="flex flex-col items-center justify-center w-full h-full text-blue-600 font-bold">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span class="text-xs mt-1">Chụp ảnh</span>
+        </button>
+        <button onclick="switchTab('inventory')" id="nav-inventory" class="flex flex-col items-center justify-center w-full h-full text-gray-500">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            <span class="text-xs mt-1">Kho sản phẩm</span>
+        </button>
+        <button onclick="switchTab('orders')" id="nav-orders" class="relative flex flex-col items-center justify-center w-full h-full text-gray-500">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+            <span class="text-xs mt-1">Đơn hàng</span>
+            <span id="order-badge" class="hidden absolute top-2 right-1/4 bg-red-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">0</span>
+        </button>
+    </nav>
+
+    <!-- Script xử lý toàn bộ hệ thống -->
+    <script>
+        let currentTab = 'scanner';
+        
+        let products = JSON.parse(localStorage.getItem('ps_products')) || [
+            { id: '1', name: 'Sữa tươi ABC', imageUrl: 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=150', hasDate: true, shelfLife: '24 tháng' },
+            { id: '2', name: 'Túi giấy đựng quà', imageUrl: 'https://images.unsplash.com/photo-1544816155-12df9643f363?w=150', hasDate: false, shelfLife: '' }
+        ];
+        let currentSessionItems = JSON.parse(localStorage.getItem('ps_session')) || [];
+        let orders = JSON.parse(localStorage.getItem('ps_orders')) || [];
+
+        let scanStep = 1;
+        let frontPhoto = null;
+        let backPhoto = null;
+        let selectedProductObj = products[0] || { name: 'Chưa có sản phẩm', hasDate: true, shelfLife: '' };
+        let detectedNsx = '';
+        let detectedHsd = '';
+        let isScanning = false;
+        let scanStatusText = '';
+
+        function saveData() {
+            localStorage.setItem('ps_products', JSON.stringify(products));
+            localStorage.setItem('ps_session', JSON.stringify(currentSessionItems));
+            localStorage.setItem('ps_orders', JSON.stringify(orders));
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('nav button').forEach(btn => btn.classList.remove('text-blue-600', 'font-bold'));
+            document.querySelectorAll('nav button').forEach(btn => btn.classList.add('text-gray-500'));
+            document.getElementById('nav-' + tab).classList.remove('text-gray-500');
+            document.getElementById('nav-' + tab).classList.add('text-blue-600', 'font-bold');
+            render();
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            let html = '';
+
+            const badge = document.getElementById('order-badge');
+            if (currentSessionItems.length > 0) {
+                badge.innerText = currentSessionItems.length;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+
+            if (currentTab === 'scanner') {
+                html = `
+                    <h2 class="text-xl font-bold mb-3 text-blue-700">Chụp sản phẩm thông minh</h2>
+                    
+                    ${scanStep === 1 ? `
+                        <div class="bg-white p-5 rounded-2xl shadow-md space-y-4 border border-blue-100">
+                            <div class="flex justify-between items-center bg-blue-50 p-2.5 rounded-xl text-xs font-semibold text-blue-800">
+                                <span>Bước 1: Chụp Mặt Trước</span>
+                                <span class="bg-blue-600 text-white px-2 py-0.5 rounded-full">Đối soát kho tự động</span>
+                            </div>
+
+                            ${!frontPhoto ? `
+                                <div class="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-xl p-6 bg-blue-50/50">
+                                    <svg class="w-10 h-10 text-blue-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                    <p class="text-xs text-gray-600 text-center mb-4">Chụp mặt trước sản phẩm để hệ thống nhận diện</p>
+                                    <label class="cursor-pointer bg-blue-600 text-white font-medium px-5 py-2.5 rounded-xl shadow hover:bg-blue-700 text-sm">
+                                        Chụp mặt trước
+                                        <input type="file" accept="image/*" capture="environment" onchange="handleCaptureFront(event)" class="hidden">
+                                    </label>
+                                </div>
+                            ` : `
+                                <div class="space-y-3">
+                                    <img src="${frontPhoto}" class="w-full h-48 object-cover rounded-xl border">
+                                    <div class="flex gap-2">
+                                        <button onclick="downloadPhoto('${frontPhoto}', 'mat-truoc.jpg')" class="flex-1 bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-lg text-center border border-green-200">📥 Lưu về máy</button>
+                                        <button onclick="frontPhoto=null; render();" class="flex-1 bg-red-50 text-red-600 text-xs font-semibold py-2 rounded-lg border border-red-200">Chụp lại</button>
+                                    </div>
+                                </div>
+                            `}
+
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Xác định tên sản phẩm (Đối chiếu kho)</label>
+                                <select id="select-product" onchange="updateSelectedProduct(this.value)" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white outline-none font-semibold text-gray-800">
+                                    ${products.map(p => `<option value="${p.name}" ${selectedProductObj.name === p.name ? 'selected' : ''}>${p.name} (${p.hasDate ? 'Có Date' : 'Không Date'})</option>`).join('')}
+                                </select>
+                            </div>
+
+                            <div class="bg-gray-50 p-3 rounded-xl border text-xs text-gray-600 flex justify-between items-center">
+                                <span>Thuộc tính trong kho:</span>
+                                <span class="font-bold ${selectedProductObj.hasDate ? 'text-blue-600' : 'text-purple-600'}">
+                                    ${selectedProductObj.hasDate ? `📅 Có Date (HSD: ${selectedProductObj.shelfLife || 'Mặc định'})` : '🚫 Không có Date'}
+                                </span>
+                            </div>
+
+                            <button ${!frontPhoto ? 'disabled' : ''} onclick="proceedNextStep()" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-xl disabled:opacity-50 hover:bg-blue-700 transition shadow">
+                                Tiếp tục theo quy tắc sản phẩm →
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="bg-white p-5 rounded-2xl shadow-md space-y-4 border border-green-100">
+                            <div class="flex justify-between items-center bg-green-50 p-2.5 rounded-xl text-xs font-semibold text-green-800">
+                                <span>Chụp Mặt Sau (Đọc Date tự động)</span>
+                                <span class="bg-green-600 text-white px-2 py-0.5 rounded-full">${selectedProductObj.name}</span>
+                            </div>
+
+                            ${!backPhoto ? `
+                                <div class="flex flex-col items-center justify-center border-2 border-dashed border-green-300 rounded-xl p-6 bg-green-50/50">
+                                    <svg class="w-10 h-10 text-green-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                    <p class="text-xs text-gray-600 text-center mb-4">Chụp khu vực in ngày sản xuất và hạn sử dụng</p>
+                                    <label class="cursor-pointer bg-green-600 text-white font-medium px-5 py-2.5 rounded-xl shadow hover:bg-green-700 text-sm">
+                                        Chụp mặt sau (Date)
+                                        <input type="file" accept="image/*" capture="environment" onchange="handleCaptureBack(event)" class="hidden">
+                                    </label>
+                                </div>
+                            ` : `
+                                <div class="space-y-3 relative">
+                                    <img src="${backPhoto}" class="w-full h-48 object-cover rounded-xl border">
+                                    ${isScanning ? `
+                                        <div class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white rounded-xl">
+                                            <svg class="animate-spin h-7 w-7 mb-2 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                                            <span class="text-xs font-medium">${scanStatusText}</span>
+                                        </div>
+                                    ` : ''}
+                                    <div class="flex gap-2">
+                                        <button onclick="downloadPhoto('${backPhoto}', 'mat-sau-date.jpg')" class="flex-1 bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-lg text-center border border-green-200">📥 Lưu về máy</button>
+                                        <button onclick="backPhoto=null; render();" class="flex-1 bg-red-50 text-red-600 text-xs font-semibold py-2 rounded-lg border border-red-200">Chụp lại</button>
+                                    </div>
+                                </div>
+                            `}
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Ngày sản xuất (NSX)</label>
+                                    <input type="text" id="input-nsx" value="${detectedNsx}" placeholder="DD.MM.YYYY" class="w-full border border-gray-300 rounded-lg p-2 text-sm outline-none font-bold text-blue-700">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Hạn sử dụng (HSD)</label>
+                                    <input type="text" id="input-hsd" value="${detectedHsd}" placeholder="DD.MM.YYYY" class="w-full border border-gray-300 rounded-lg p-2 text-sm outline-none font-bold text-red-600">
+                                </div>
+                            </div>
+
+                            <div class="flex gap-2 pt-1">
+                                <button onclick="scanStep=1; render();" class="w-1/3 border border-gray-300 text-gray-700 font-medium py-2.5 rounded-xl text-sm hover:bg-gray-50">← Quay lại</button>
+                                <button onclick="saveItemWithDate()" class="w-2/3 bg-green-600 text-white font-semibold py-2.5 rounded-xl text-sm hover:bg-green-700 shadow">HOÀN TẤT & THÊM</button>
+                            </div>
+                        </div>
+                    `}
+
+                    ${currentSessionItems.length > 0 ? `
+                        <div class="mt-4 bg-blue-50 border border-blue-200 p-3.5 rounded-xl flex items-center justify-between">
+                            <div>
+                                <p class="text-xs text-blue-600 font-medium">Đã chụp trong phiên:</p>
+                                <p class="text-base font-bold text-blue-900">${currentSessionItems.length} sản phẩm</p>
+                            </div>
+                            <button onclick="switchTab('orders')" class="bg-green-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold shadow hover:bg-green-700">Xem đơn hàng</button>
+                        </div>
+                    ` : ''}
+                `;
+            } else if (currentTab === 'inventory') {
+                html = `
+                    <h2 class="text-xl font-bold mb-3 text-blue-700">Quản lý kho sản phẩm</h2>
+                    <form onsubmit="addProduct(event)" class="bg-white p-4 rounded-xl shadow-md mb-5 space-y-3 border">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Tên sản phẩm</label>
+                            <input type="text" id="inv-name" placeholder="Ví dụ: Sữa tươi ABC" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none" required>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Thuộc tính Date</label>
+                                <select id="inv-hasdate" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white outline-none">
+                                    <option value="true">📅 Có Date</option>
+                                    <option value="false">🚫 Không có Date</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Hạn sử dụng mặc định</label>
+                                <input type="text" id="inv-shelflife" placeholder="Ví dụ: 24 tháng" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Hình ảnh mẫu sản phẩm</label>
+                            <input type="file" id="inv-file" accept="image/*" class="w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" required>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 text-white font-medium py-2.5 rounded-lg text-sm hover:bg-blue-700">Thêm sản phẩm vào kho</button>
+                    </form>
+
+                    <div class="space-y-3">
+                        <h3 class="font-semibold text-gray-700 text-sm">Danh sách kho (${products.length})</h3>
+                        ${products.length === 0 ? '<p class="text-gray-400 text-xs italic">Kho chưa có sản phẩm nào.</p>' : ''}
+                        ${products.map(p => `
+                            <div class="bg-white p-3 rounded-xl shadow-sm flex items-center justify-between border">
+                                <div class="flex items-center space-x-3">
+                                    <img src="${p.imageUrl}" class="w-12 h-12 object-cover rounded-lg border">
+                                    <div>
+                                        <p class="font-medium text-sm text-gray-800">${p.name}</p>
+                                        <p class="text-[11px] text-gray-500">${p.hasDate ? '📅 Có Date (' + (p.shelflife || '24 tháng') + ')' : '🚫 Không có Date'}</p>
+                                    </div>
+                                </div>
+                                <button onclick="deleteProduct('${p.id}')" class="text-red-600 p-2 hover:bg-red-50 rounded-lg text-xs font-semibold">Xóa</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else if (currentTab === 'orders') {
+                html = `
+                    <h2 class="text-xl font-bold text-blue-700 mb-3">Quản lý Đơn hàng</h2>
+                    
+                    ${currentSessionItems.length > 0 ? `
+                        <div class="bg-white p-4 rounded-xl shadow-md border border-blue-200 space-y-3 mb-5">
+                            <div class="flex justify-between items-center border-b pb-2">
+                                <h3 class="font-semibold text-sm text-gray-800">Đơn hiện tại (${currentSessionItems.length})</h3>
+                                <button onclick="finishOrder()" class="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold shadow hover:bg-green-700">Lưu đơn hàng</button>
+                            </div>
+                            <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
+                                ${currentSessionItems.map((item, idx) => `
+                                    <div class="flex items-center justify-between bg-gray-50 p-2.5 rounded-lg border text-xs">
+                                        <div class="flex items-center space-x-2">
+                                            <img src="${item.frontPhoto || ''}" class="w-9 h-9 object-cover rounded">
+                                            <div>
+                                                <p class="font-bold text-gray-900">${item.productName}</p>
+                                                <p class="text-gray-600">${item.nsx === 'Không có date' ? 'Không có date' : `${item.nsx} → ${item.hsd}`}</p>
+                                            </div>
+                                        </div>
+                                        <div class="flex gap-1">
+                                            <button onclick="editSessionItem(${idx})" class="text-blue-600 bg-blue-50 px-2 py-1 rounded">Sửa</button>
+                                            <button onclick="currentSessionItems.splice(${idx},1); saveData(); render();" class="text-red-600 bg-red-50 px-2 py-1 rounded">Xóa</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <button onclick="copyAll('${encodeURIComponent(generateText(currentSessionItems))}')" class="w-full bg-blue-600 text-white font-medium py-2.5 rounded-xl text-sm hover:bg-blue-700 shadow">Sao chép tất cả</button>
+                        </div>
+                    ` : ''}
+
+                    <div class="space-y-4">
+                        <h3 class="font-semibold text-gray-700 text-sm">Lịch sử đơn hàng đã lưu (${orders.length})</h3>
+                        ${orders.length === 0 ? '<p class="text-gray-400 text-xs italic">Chưa có lịch sử đơn hàng nào.</p>' : ''}
+                        ${orders.map((o, oIdx) => `
+                            <div class="bg-white p-4 rounded-xl shadow-sm border space-y-2.5">
+                                <div class="flex justify-between items-center text-xs text-gray-500 border-b pb-1.5">
+                                    <span>Thời gian: ${o.time}</span>
+                                    <button onclick="deleteOrder(${oIdx})" class="text-red-500 hover:underline">Xóa đơn</button>
+                                </div>
+                                <div class="bg-gray-50 p-3 rounded-lg font-mono text-xs whitespace-pre-line border">${generateText(o.items)}</div>
+                                <div class="flex gap-2">
+                                    <button onclick="copyAll('${encodeURIComponent(generateText(o.items))}')" class="flex-1 border border-blue-600 text-blue-600 py-2 rounded-lg text-xs font-medium hover:bg-blue-50">Sao chép đơn này</button>
+                                    <button onclick="editOrderHistory(${oIdx})" class="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg text-xs font-medium hover:bg-gray-200 border">Sửa nội dung</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            app.innerHTML = html;
+        }
+
+        function downloadPhoto(dataUrl, filename) {
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function handleCaptureFront(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onloadend = function() {
+                frontPhoto = reader.result;
+                downloadPhoto(frontPhoto, 'mat-truoc-' + Date.now() + '.jpg');
+                render();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function updateSelectedProduct(name) {
+            const found = products.find(p => p.name === name);
+            if (found) {
+                selectedProductObj = found;
+                render();
+            }
+        }
+
+        function proceedNextStep() {
+            if (selectedProductObj.hasDate) {
+                scanStep = 2;
+                render();
+            } else {
+                const newItem = {
+                    id: Date.now().toString(),
+                    productName: selectedProductObj.name,
+                    nsx: 'Không có date',
+                    hsd: '',
+                    frontPhoto: frontPhoto,
+                    backPhoto: null
+                };
+                currentSessionItems.push(newItem);
+                saveData();
+                resetScanState();
+                alert(`Đã thêm "${newItem.productName}" (Không có date) vào đơn hàng!`);
+            }
+        }
+
+        async function handleCaptureBack(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onloadend = async function() {
+                backPhoto = reader.result;
+                downloadPhoto(backPhoto, 'mat-sau-date-' + Date.now() + '.jpg');
+                render();
+
+                isScanning = true;
+                scanStatusText = 'Đang đọc ngày tháng thông minh...';
+                render();
+
+                try {
+                    const ret = await Tesseract.recognize(backPhoto, 'eng');
+                    const rawText = ret.data.text;
+                    const foundDates = extractDatesSmart(rawText);
+
+                    if (foundDates.length >= 2) {
+                        detectedNsx = foundDates[0];
+                        detectedHsd = foundDates[1];
+                    } else if (foundDates.length === 1) {
+                        detectedNsx = foundDates[0];
+                        detectedHsd = '';
+                    } else {
+                        // Không đọc được thì để trống ô, không gán ngày cố định
+                        detectedNsx = '';
+                        detectedHsd = '';
+                    }
+                } catch (err) {
+                    detectedNsx = '';
+                    detectedHsd = '';
+                } finally {
+                    isScanning = false;
+                    render();
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function extractDatesSmart(text) {
+            let dates = [];
+            const regexList = [
+                /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/g,
+                /\b(\d{4})[./-](\d{1,2})[./-](\d{1,2})\b/g
+            ];
+
+            let match;
+            for (let reg of regexList) {
+                while ((match = reg.exec(text)) !== null) {
+                    let d1 = match[1], d2 = match[2], d3 = match[3];
+                    let day, month, year;
+
+                    if (d3.length === 4 && parseInt(d3) > 1900) { 
+                        day = d1.padStart(2, '0'); month = d2.padStart(2, '0'); year = d3;
+                    } else if (d1.length === 4 && parseInt(d1) > 1900) { 
+                        year = d1; month = d2.padStart(2, '0'); day = d3.padStart(2, '0');
+                    } else if (d3.length === 2) {
+                        day = d1.padStart(2, '0'); month = d2.padStart(2, '0'); year = '20' + d3;
+                    }
+
+                    if (day && month && year) {
+                        let formatted = `${day}.${month}.${year}`;
+                        if (!dates.includes(formatted)) dates.push(formatted);
+                    }
+                }
+            }
+            return dates;
+        }
+
+        function saveItemWithDate() {
+            const nsx = document.getElementById('input-nsx')?.value || detectedNsx || '';
+            const hsd = document.getElementById('input-hsd')?.value || detectedHsd || '';
+            
+            const newItem = {
+                id: Date.now().toString(),
+                productName: selectedProductObj.name,
+                nsx: nsx,
+                hsd: hsd,
+                frontPhoto: frontPhoto,
+                backPhoto: backPhoto
+            };
+
+            currentSessionItems.push(newItem);
+            saveData();
+            resetScanState();
+        }
+
+        function resetScanState() {
+            scanStep = 1;
+            frontPhoto = null;
+            backPhoto = null;
+            detectedNsx = '';
+            detectedHsd = '';
+            render();
+        }
+
+        function finishOrder() {
+            if (currentSessionItems.length === 0) return;
+            orders.unshift({ time: new Date().toLocaleString('vi-VN'), items: [...currentSessionItems] });
+            currentSessionItems = [];
+            saveData();
+            switchTab('orders');
+        }
+
+        function generateText(items) {
+            return items.map(i => {
+                if (i.nsx === 'Không có date') {
+                    return `${i.productName}\nKhông có date`;
+                }
+                return `${i.productName}\n${i.nsx} → ${i.hsd}`;
+            }).join('\n\n');
+        }
+
+        function copyAll(encodedText) {
+            const text = decodeURIComponent(encodedText);
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Đã sao chép tất cả vào bộ nhớ tạm!');
+            });
+        }
+
+        function addProduct(e) {
+            e.preventDefault();
+            const name = document.getElementById('inv-name').value;
+            const hasDate = document.getElementById('inv-hasdate').value === 'true';
+            const shelfLife = document.getElementById('inv-shelflife').value;
+            const fileInput = document.getElementById('inv-file');
+            
+            if (fileInput.files && fileInput.files[0]) {
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    products.push({ 
+                        id: Date.now().toString(), 
+                        name, 
+                        imageUrl: reader.result, 
+                        hasDate, 
+                        shelfLife 
+                    });
+                    saveData();
+                    document.getElementById('inv-name').value = document.getElementById('inv-shelflife').value = '';
+                    fileInput.value = '';
+                    render();
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            }
+        }
+
+        function deleteProduct(id) {
+            products = products.filter(p => p.id !== id);
+            saveData();
+            render();
+        }
+
+        function deleteOrder(idx) {
+            orders.splice(idx, 1);
+            saveData();
+            render();
+        }
+
+        function editSessionItem(idx) {
+            const item = currentSessionItems[idx];
+            const newName = prompt("Chỉnh sửa tên sản phẩm:", item.productName);
+            if (newName === null) return;
+            const newNsx = prompt("Chỉnh sửa NSX (hoặc 'Không có date'):", item.nsx);
+            const newHsd = prompt("Chỉnh sửa HSD:", item.hsd);
+            
+            item.productName = newName || item.productName;
+            item.nsx = newNsx || item.nsx;
+            item.hsd = newHsd || item.hsd;
+            saveData();
+            render();
+        }
+
+        function editOrderHistory(oIdx) {
+            const order = orders[oIdx];
+            const newText = prompt("Chỉnh sửa nội dung đơn hàng:", generateText(order.items));
+            if (newText === null) return;
+            
+            const lines = newText.split('\n').filter(l => l.trim() !== '');
+            let newItems = [];
+            for (let i = 0; i < lines.length; i += 2) {
+                if (lines[i+1]) {
+                    if (lines[i+1].includes('Không có date')) {
+                        newItems.push({ productName: lines[i], nsx: 'Không có date', hsd: '' });
+                    } else {
+                        const parts = lines[i+1].split('→').map(s => s.trim());
+                        newItems.push({
+                            productName: lines[i],
+                            nsx: parts[0] || '',
+                            hsd: parts[1] || ''
+                        });
+                    }
+                }
+            }
+            if (newItems.length > 0) {
+                order.items = newItems;
+                saveData();
+                render();
+            }
+        }
+
+        render();
+    </script>
+</body>
+</html>
